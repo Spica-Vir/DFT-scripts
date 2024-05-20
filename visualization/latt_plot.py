@@ -60,9 +60,9 @@ class Atom:
         elif self.atomic_num > 2 and self.atomic_num <= 10:
             radius = 0.3
         elif self.atomic_num > 10 and self.atomic_num <= 18:
-            radius = 0.35
-        else:
             radius = 0.40
+        else:
+            radius = 0.45
 
         if not xpos: 
             xpos = self.xcoord
@@ -115,21 +115,32 @@ class Cell:
     """
     Class Cell, defining the lattice for calculation, i.e., the lattice defined 
     in fort.34 file. Plotted in black dashed line. 
-        x(y): 2D-list, the x(y) coordinates of cell corners for plotting. Each 
-            element marks the beginning and ending x(y) coordinates of the bond.  
-            e.g., x = [[0., x1], [x1, x2], [x2, x3], [x3, x4], [x4, 0.]]
         vect_a(vect_b): list, includes the base 2D lattice vectors. 
             i.e., vect_a = [lattice_matrix[0, 0], lattice_matrix[0, 1]]
                   vect_b = [lattice_matrix[1, 0], lattice_matrix[1, 1]]
     """
 
-    def __init__(self, x=[], y=[], vect_a=[], vect_b=[]):
-        self.x = x
-        self.y = y
+    def __init__(self, vect_a=[], vect_b=[]):
         self.vect_a = vect_a
         self.vect_b = vect_b
 
-    def drawCell(self, ax, linecolor='k', linewidth=0.5, linestyle='dashed'):
+    def drawCell(self, ax, origin=[0., 0.],
+                 linecolor='k', linewidth=0.5, linestyle='dashed'):
+        # origin: in fractional coordinates of a,b
+        import numpy as np
+
+        orga = origin[0]*np.array(self.vect_a)
+        orgb = origin[1]*np.array(self.vect_b)
+        orgx = orga[0] + orgb[0]
+        orgy = orga[1] + orgb[1]
+        self.x = [[orgx, orgx+self.vect_a[0]],
+                  [orgx+self.vect_a[0], orgx+self.vect_a[0]+self.vect_b[0]],
+                  [orgx+self.vect_a[0]+self.vect_b[0], orgx+self.vect_b[0]],
+                  [orgx+self.vect_b[0], orgx]]
+        self.y = [[orgy, orgy+self.vect_a[1]],
+                  [orgy+self.vect_a[1], orgy+self.vect_a[1]+self.vect_b[1]],
+                  [orgy+self.vect_a[1]+self.vect_b[1], orgy+self.vect_b[1]],
+                  [orgy+self.vect_b[1], orgy]]
         for i in range(len(self.x)):
             ax.plot(self.x[i], self.y[i], color=linecolor,
                     linewidth=linewidth, linestyle=linestyle, zorder = 2)
@@ -180,7 +191,7 @@ class Colorbar:
         return self
 
     def drawColorbar(self):
-        tickpos = np.linspace(self.mi, self.mx, ntick)
+        tickpos = np.linspace(self.mi, self.mx, 5)
         cmap = mpl.colors.ListedColormap(self.colormap)
         norm = mpl.colors.Normalize(vmin=self.mi, vmax=self.mx)
         cb = mpl.colorbar.ColorbarBase(self.ax, cmap=cmap, norm=norm,
@@ -205,16 +216,7 @@ def read_geom(gui_line):
         if countline == 1:
             vect_a = gui_line[countline].strip().split()
             vect_b = gui_line[countline + 1].strip().split()
-            cell_x = [[0., float(vect_a[0])], 
-                      [float(vect_a[0]), float(vect_a[0]) + float(vect_b[0])],
-                      [float(vect_a[0]) + float(vect_b[0]), float(vect_b[0])],
-                      [float(vect_b[0]), 0.]]
-            cell_y = [[0., float(vect_a[1])],
-                      [float(vect_a[1]), float(vect_a[1]) + float(vect_b[1])],
-                      [float(vect_a[1]) + float(vect_b[1]), float(vect_b[1])],
-                      [float(vect_b[1]), 0.]]
-            latt_cell = Cell(x = cell_x, y = cell_y,
-                             vect_a = [float(vect_a[0]), float(vect_a[1])],
+            latt_cell = Cell(vect_a = [float(vect_a[0]), float(vect_a[1])],
                              vect_b = [float(vect_b[0]), float(vect_b[1])])
             latvec_matrix = np.matrix([latt_cell.vect_a, latt_cell.vect_b])
             latvec_rev = np.linalg.inv(latvec_matrix)
@@ -238,8 +240,8 @@ def read_geom(gui_line):
                     frac[0, 1] += 1
 
                 xycoord = frac * latvec_matrix
-                an_atom = Atom(label = int(countlabel)%100,
-                               atomic_num = int(coord[0]), 
+                an_atom = Atom(label = int(countlabel),
+                               atomic_num = int(coord[0])%100, 
                                xcoord = float(xycoord[0, 0]),
                                ycoord = float(xycoord[0, 1]),
                                zcoord = float(coord[3]),
@@ -480,16 +482,20 @@ def color_assign(data_in, colormap=[[0, 0, 1],
 
     return data_in, colormap
 
-def plot(atoms, bonds, mean_bond, latt_cell, out_name='fig_out',
+def plot(atoms, bonds, mean_bond, latt_cell, cell_origin=[0, 0],
+         expand=[[0, 1], [0, 1]], out_name='fig_out',
          colormap=[[0, 0, 1], [0, 1, 1], [0, 1, 0], [1, 1, 0], [1, 0, 0]]):
-    fig = plt.figure()
+    # expand plotted cell
+    bonds_new = cellexpand(latt_cell, bonds=bonds, expand=expand)
+
+    fig = plt.figure(figsize=[10, 7.5])
     grid = plt.GridSpec(2, 20)
-    # plot the bonds and atoms at their two ends. 
+    # plot the bonds and atoms at their two ends.
     ax = fig.add_subplot(grid[:, 0:19])
     drawn_pos = []
     mx_atomic_num = max([i.atomic_num for i in atoms])
     mi_atomic_num = min([i.atomic_num for i in atoms])
-    for i in bonds:
+    for i in bonds_new:
         i.drawBond(ax)
         if not [i.x[0], i.y[0]] in drawn_pos:
             atoms[i.bg_label - 1].drawAtom(ax, xpos=i.x[0], ypos=i.y[0])
@@ -500,25 +506,25 @@ def plot(atoms, bonds, mean_bond, latt_cell, out_name='fig_out',
             drawn_pos.append([i.x[1], i.y[1]])
 
     # draw colorbar for bonds
-    bond_data = [i.data for i in bonds if i.data]
+    bond_data = [i.data for i in bonds_new if i.data]
     if bond_data:
         bond_barax = fig.add_subplot(grid[1, 19])
         bond_bar = Colorbar(ax=bond_barax, mx=max(bond_data),
                             mi=min(bond_data))
         bond_bar = bond_bar.grad_cmap(colormap=colormap)
-        bond_bar.drawColorbar()
+        bond_bar.drawColorbar(linewidth=3)
 
     # draw colorbar for atoms
     atom_data = [i.data for i in atoms if i.data]
     if atom_data:
         atom_barax = fig.add_subplot(grid[0, 19])
-        atom_bar = Colorbar(ax=atom_barax, mx=max(atom_data),
-                            mi=min(atom_data))
+        atom_bar = Colorbar(ax=atom_barax, mx=0.094,
+                            mi=-0.052)
         atom_bar = atom_bar.grad_cmap(colormap=colormap)
         atom_bar.drawColorbar()
 
     # draw lattice cell
-    latt_cell.drawCell(ax)
+    latt_cell.drawCell(ax, cell_origin)
     # setting up the plot window edges
     rangex = [i[0] for i in drawn_pos]
     rangex.append(max(max(latt_cell.x)))
@@ -569,7 +575,13 @@ atoms, bonds = read_data(f1_line, f2_line, atoms, natom, bonds)
 atoms, colormap = color_assign(atoms)
 bonds, colormap = color_assign(bonds)
 
-# bonds_new = cellexpand(latt_cell, bonds = bonds, expand=[[-1, 1], [-1, 1]])
-bonds_new = cellexpand(latt_cell, bonds = bonds, expand=[[0, 1], [0, 1]])
-
-plot(atoms, bonds_new, mean_bond, latt_cell, colormap = colormap)
+# plot(atoms, bonds, mean_bond, latt_cell,
+#      cell_origin=[0.4, 0.4],
+#      expand=[[0.4,1.4], [0.4, 1.4]],
+#      colormap=colormap,
+#      out_name='chg5x5')
+plot(atoms, bonds, mean_bond, latt_cell,
+     cell_origin=[-0.5, -0.5],
+     expand=[[-0.5,0.5], [-0.5, 0.5]],
+     colormap=colormap,
+     out_name='chg4x4')
