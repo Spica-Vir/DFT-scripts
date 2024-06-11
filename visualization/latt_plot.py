@@ -52,7 +52,8 @@ class Atom:
         self.atomic_symbol = e.symbol
         self.atomic_radius = e.atomic_radius*1e-2 # pm to angstrom
 
-    def drawAtom(self, ax, linecolor='k', linewidth=1, xpos=None, ypos=None):
+    def drawAtom(self, ax, linecolor='k', linewidth=1, xpos=None, ypos=None,
+                 plotsymbol=False):
         """
         xpos(ypos): considering the possible expansion, xpos(ypos) instead of 
             xcoord(ycoord) is used for plotting. Defined by x(y) of Bond object.
@@ -82,7 +83,8 @@ class Atom:
                       linewidth=linewidth)
         ax.add_patch(atom)
         atom.set_zorder(1)
-        # ax.text(xpos, ypos, self.atomic_symbol, horizontalalignment='center', verticalalignment='center')
+        if plotsymbol == True:
+            ax.text(xpos, ypos, self.atomic_symbol, horizontalalignment='center', verticalalignment='center')
 
 class Bond:
     """
@@ -495,7 +497,7 @@ def read_data(f1_line, f2_line, atoms=[], natom=0, bonds=[]):
 def plot(atoms, bonds, mean_bond, latt_cell, cell_origin=[0, 0],
          expand=[[0, 1], [0, 1]], out_name='fig_out',
          colormap=[[0, 0, 1], [0, 1, 1], [0, 1, 0], [1, 1, 0], [1, 0, 0]],
-         colorrange=[None, None]):
+         colorrange=[None, None], plotcell=True, plotsymbol=False):
     """
     Plot 2D colored atoms. atoms, bonds, mean_bond are outputs of previous
     steps, refer to the main function.
@@ -510,6 +512,8 @@ def plot(atoms, bonds, mean_bond, latt_cell, cell_origin=[0, 0],
             of colormap
         colorrange (list): 2\*2 list. Lower and upper range of colormaps for
             atoms and bonds. None for default ones.
+        plotcell (bool): Whether to plot cell boundaries.
+        plotsymbol (bool): Whether to add symbols of atoms onto circles
 
     For default colormap:
         Red: (1, 0, 0) (max)
@@ -560,22 +564,23 @@ def plot(atoms, bonds, mean_bond, latt_cell, cell_origin=[0, 0],
     for i in bonds_new:
         i.drawBond(ax)
         if not [i.x[0], i.y[0]] in drawn_pos:
-            atoms[i.bg_label - 1].drawAtom(ax, xpos=i.x[0], ypos=i.y[0])
+            atoms[i.bg_label - 1].drawAtom(ax, xpos=i.x[0], ypos=i.y[0], plotsymbol=plotsymbol)
             drawn_pos.append([i.x[0], i.y[0]])
 
         if not [i.x[1], i.y[1]] in drawn_pos:
-            atoms[i.ed_label - 1].drawAtom(ax, xpos=i.x[1], ypos=i.y[1])
+            atoms[i.ed_label - 1].drawAtom(ax, xpos=i.x[1], ypos=i.y[1], plotsymbol=plotsymbol)
             drawn_pos.append([i.x[1], i.y[1]])
 
-    # draw lattice cell
-    latt_cell.drawCell(ax, cell_origin)
     # setting up the plot window edges
     rangex = [i[0] for i in drawn_pos]
-    rangex.append(max(max(latt_cell.x)))
-    rangex.append(min(min(latt_cell.x)))
     rangey = [i[1] for i in drawn_pos]
-    rangey.append(max(max(latt_cell.y)))
-    rangey.append(min(min(latt_cell.y)))
+    # draw lattice boundary
+    if plotcell == True:
+        latt_cell.drawCell(ax, cell_origin)
+        rangex.append(max(max(latt_cell.x)))
+        rangex.append(min(min(latt_cell.x)))
+        rangey.append(max(max(latt_cell.y)))
+        rangey.append(min(min(latt_cell.y)))
     xmi = min(rangex) - mean_bond / 4
     xmx = max(rangex) + mean_bond / 4
     ymi = min(rangey) - mean_bond / 4
@@ -589,40 +594,40 @@ def plot(atoms, bonds, mean_bond, latt_cell, cell_origin=[0, 0],
     plt.show()
 
 
-# main function
-gui_file = sys.argv[1]
-gui = open(gui_file, "r")
-gui_line = gui.readlines()
-gui.close()
+# # main function
+# gui_file = sys.argv[1]
+# gui = open(gui_file, "r")
+# gui_line = gui.readlines()
+# gui.close()
 
-file_1 = sys.argv[2]
-f1 = open(file_1, "r")
-f1_line = f1.readlines()
-f1.close()
+# file_1 = sys.argv[2]
+# f1 = open(file_1, "r")
+# f1_line = f1.readlines()
+# f1.close()
 
-if len(sys.argv) == 4:
-    file_2 = sys.argv[3]
-    f2 = open(file_2, "r")
-    f2_line = f2.readlines()
-    f2.close()
-else:
-    if len(f1_line[1].strip().split()) == 3:
-        f2_line = f1_line
-        f1_line = []
-    else:
-        f2_line = []
+# if len(sys.argv) == 4:
+#     file_2 = sys.argv[3]
+#     f2 = open(file_2, "r")
+#     f2_line = f2.readlines()
+#     f2.close()
+# else:
+#     if len(f1_line[1].strip().split()) == 3:
+#         f2_line = f1_line
+#         f1_line = []
+#     else:
+#         f2_line = []
 
-atoms, natom, latt_cell = read_geom(gui_line)
-bonds, mean_bond = connectivity(atoms, natom, latt_cell, scale=1.1)
-atoms, bonds = read_data(f1_line, f2_line, atoms, natom, bonds)
+# atoms, natom, latt_cell = read_geom(gui_line)
+# bonds, mean_bond = connectivity(atoms, natom, latt_cell, scale=1.1)
+# atoms, bonds = read_data(f1_line, f2_line, atoms, natom, bonds)
 
-plot(atoms, bonds, mean_bond, latt_cell,
-     cell_origin=[0.4, 0.4],
-     expand=[[0.4,1.4], [0.4, 1.4]],
-     out_name='chg10x10',
-     colorrange=[[-0.052, 0.094], None])
 # plot(atoms, bonds, mean_bond, latt_cell,
-#      cell_origin=[-0.5, -0.5],
-#      expand=[[-0.5,0.5], [-0.5, 0.5]],
-#      out_name='chg8x8',
+#      cell_origin=[0.4, 0.4],
+#      expand=[[0.4,1.4], [0.4, 1.4]],
+#      out_name='chg10x10',
 #      colorrange=[[-0.052, 0.094], None])
+# # plot(atoms, bonds, mean_bond, latt_cell,
+# #      cell_origin=[-0.5, -0.5],
+# #      expand=[[-0.5,0.5], [-0.5, 0.5]],
+# #      out_name='chg8x8',
+# #      colorrange=[[-0.052, 0.094], None])
