@@ -28,7 +28,7 @@ class Atom:
         xcoord(ycoord,zcoord): float, cartesian coordinates of atoms. 
         fracx(fracy): float, fractional coordinates (x,y) of atoms. Note, 
             fracx(fracy) correspond to lattice matrix of the input geometry and 
-            will be > 1 or < 0 if function cellexpand is used. 
+            will be > 1 or < 0 if function expansion is used. 
     """
 
     def __init__(self, label=0, atomic_num=0, 
@@ -36,6 +36,8 @@ class Atom:
                  xcoord=0., ycoord=0., zcoord=0., 
                  fracx=0., fracy=0.):
         from mendeleev import element
+
+        e = element(atomic_num)
 
         self.label = label
         self.atomic_num = atomic_num
@@ -47,7 +49,8 @@ class Atom:
         self.zcoord = zcoord
         self.fracx = fracx
         self.fracy = fracy
-        self.atomic_symbol = element(self.atomic_num).symbol
+        self.atomic_symbol = e.symbol
+        self.atomic_radius = e.atomic_radius*1e-2 # pm to angstrom
 
     def drawAtom(self, ax, linecolor='k', linewidth=1, xpos=None, ypos=None):
         """
@@ -64,7 +67,7 @@ class Atom:
         else:
             radius = 0.45
 
-        if not xpos: 
+        if not xpos:
             xpos = self.xcoord
 
         if not ypos:
@@ -155,11 +158,16 @@ class Colorbar:
         orientation: whether the bar is plotted horizontally or vertically
         colormap: 2D list, each element defines the color(RGB values normalized 
             to 1) at an 'important' point. Colors between those points are 
-            obtained by interpolation. 
+            obtained by interpolation. For default colormap:
+            Red: (1, 0, 0) (max)
+            Yellow: (1, 1, 0)
+            Green: (0, 1, 0)
+            Cyan: (0, 1, 1)
+            Blue: (0, 0, 1) (min)
     """
 
     def __init__(self, ax, mx=5., mi=0., orientation='vertical', 
-                 colormap=[[0, 0, 1], [0, 1, 0],[1, 0, 0]],):
+                 colormap=[[0, 0, 1], [0, 1, 1], [0, 1, 0], [1, 1, 0], [1, 0, 0]],):
         self.ax = ax
         self.mx = mx
         self.mi = mi
@@ -198,6 +206,50 @@ class Colorbar:
                                        orientation=self.orientation)
         cb.set_ticks(tickpos)
 
+    def assign_color(self, data_in):
+        """
+        Defining the color for each atom/bond object acording to its data.
+
+        data_in: A list of Atom or Bond objects
+        """
+        nseg = len(self.colormap) - 1
+        data = [i.data for i in data_in if i.data != None]
+        if data:
+            for i in data_in:
+                if i.data != None:
+                    if i.data <= self.mi:
+                        i.color = [self.colormap[0][0],
+                                   self.colormap[0][1],
+                                   self.colormap[0][2]]
+                        continue
+                    elif i.data >= self.mx:
+                        i.color = [self.colormap[-1][0],
+                                   self.colormap[-1][1],
+                                   self.colormap[-1][2]]
+                        continue
+
+                    norm = (i.data - self.mi) / (self.mx - self.mi) * nseg
+                    pos = float(math.floor(norm))
+                    if math.isclose(norm, pos, rel_tol=1e-4) and not \
+                       math.isclose(pos, 0., rel_tol=1e-4):
+                        pos -= 1
+
+                    pos = int(pos)
+                    i.color = [
+                        round(
+                            (norm - pos) * (self.colormap[pos + 1][0] - self.colormap[pos][0]) + self.colormap[pos][0], 4
+                        ),
+                        round(
+                            (norm - pos) * (self.colormap[pos + 1][1] - self.colormap[pos][1]) + self.colormap[pos][1], 4
+                        ),
+                        round(
+                            (norm - pos) * (self.colormap[pos + 1][2] - self.colormap[pos][2]) + self.colormap[pos][2], 4
+                        )
+                    ]
+                else:
+                    continue
+
+        return data_in
 
 def read_geom(gui_line):
     """
@@ -256,55 +308,58 @@ def read_geom(gui_line):
 
     return atoms, natom, latt_cell
 
-def connectivity(atoms, natom, latt_cell, bond_max=2.0):
+def connectivity(atoms, natom, latt_cell, scale=1.25):
     """
     Judge the connectivity between arbitrary 2 atoms, used for building bond
     network. Each bond is defined as a Bond object. 
 
-    Connectivity of bonds across the cell boundary is obtained by building a 2x2
-    supercell. See function cellexpand (line 270)
-
-        bond_max: float, maximum allowed distance between 2 atoms regarded to be
-            bonded (Angstrom)
+        scale (float): The connectivity between A and B is inferred by atomic radius of (A + B)*scale
         bonds: list, list of all Bond objects
         mean_bond: float, average bond length
     """
-    # Bonds cross the cell boundary are plotted on the left & upper boundaries
-    # To change that, change parameter expand
-    atoms_new, natom_new = cellexpand(latt_cell, atoms = atoms,
-                                      expand=[[-1, 1], [0, 2]])
-    bonds = []
+    import numpy as np
+
+    # Neighbored cells used for cross boundary bonds
+    nbr_cell = np.array([[0, 0], [1, 0], [0, 1], [1, 1]], dtype=float)
+    bond_list = []
+    bond_old = []
+    for i in range(natom):
+        icoord = np.array([atoms[i].xcoord, atoms[i].ycoord])
+        for j in range(natom):
+            if i == j:
+                continue
+            bond_max = (atoms[i].atomic_radius + atoms[j].atomic_radius)*scale
+            j_cart = np.repeat([[atoms[j].xcoord, atoms[j].ycoord]], 4, axis=0)\
+                   + np.dot(nbr_cell, [latt_cell.vect_a, latt_cell.vect_b])
+            j_frac = np.repeat([[atoms[j].fracx, atoms[j].fracy]], 4, axis=0)\
+                   + nbr_cell
+            for nf, f in enumerate(j_cart):
+                if np.linalg.norm(icoord - f) <= bond_max:
+                    a_bond = Bond(x=[icoord[0], f[0]],
+                                  y=[icoord[1], f[1]],
+                                  bg_label=atoms[i].label,
+                                  bg_fx=atoms[i].fracx, bg_fy=atoms[i].fracy,
+                                  ed_label=atoms[j].label,
+                                  ed_fx=j_frac[nf, 0],
+                                  ed_fy=j_frac[nf, 1])
+                    bond_old.append(a_bond)
+                    bond_list.append([min([i, j]), max([i, j])])
+                    break
+                else:
+                    continue
+
+    new_list = list(set([tuple(t) for t in bond_list]))
     mean_bond = 0
-    bonded_label = []
-    for i in atoms:
-        for j in range(natom_new):
-            num = atoms_new[j].label
-            label_judge = [min([i.label, num]), max([i.label, num])]
-
-            if math.isclose(atoms[num - 1].xcoord, atoms_new[j].xcoord, rel_tol=1e-2) & \
-               math.isclose(atoms[num - 1].ycoord, atoms_new[j].ycoord, rel_tol=1e-2):
-                rep = 0
-            else:
-                rep = 1
-
-            if ((rep != 0) & (i.label != num)) | \
-            ((rep == 0) & (i.label != num) & (not label_judge in bonded_label)):
-                dist = ((i.xcoord - atoms_new[j].xcoord) ** 2 + 
-                    (i.ycoord - atoms_new[j].ycoord) ** 2 +
-                    (i.zcoord - atoms_new[j].zcoord) ** 2) ** 0.5
-                if dist <= bond_max:
-                    if rep == 0:
-                        bonded_label.append(label_judge)
-
-                    a_bond = Bond(x=[i.xcoord, atoms_new[j].xcoord], 
-                                  y=[i.ycoord, atoms_new[j].ycoord], 
-                                  bg_label=i.label, 
-                                  bg_fx=i.fracx, bg_fy=i.fracy, 
-                                  ed_label=atoms_new[j].label,
-                                  ed_fx=atoms_new[j].fracx, 
-                                  ed_fy=atoms_new[j].fracy)
-                    bonds.append(a_bond)
-                    mean_bond += dist
+    bonds = []
+    for i in new_list:
+        for nj, j in enumerate(bond_list):
+            if i == tuple(j):
+                bonds.append(bond_old[nj])
+                break
+        mean_bond += np.linalg.norm(
+            np.array([bond_old[nj].x[1], bond_old[nj].y[1]]) - \
+            np.array([bond_old[nj].x[0], bond_old[nj].y[0]])
+        )
 
     mean_bond /= len(bonds)
     return bonds, mean_bond
@@ -437,59 +492,66 @@ def read_data(f1_line, f2_line, atoms=[], natom=0, bonds=[]):
 
     return atoms, bonds
 
-def color_assign(data_in, colormap=[[0, 0, 1],
-                                    [0, 1, 1],
-                                    [0, 1, 0],
-                                    [1, 1, 0],
-                                    [1, 0, 0]]):
-    """
-    Defining the color for each atom/bond object acording to its data. 
-    For default colormap:
-    Red: (1, 0, 0) (max)
-    Yellow: (1, 1, 0)
-    Green: (0, 1, 0)
-    Cyan: (0, 1, 1)
-    Blue: (0, 0, 1) (min)
-
-        colormap: 2D list, defined by the list of important points (RGB) and is 
-            kept consistent with colormap property of object Colorbar
-    """
-    nseg = len(colormap) - 1
-    data = [i.data for i in data_in if i.data != None]
-    if data:
-        mx = max(data)
-        mi = min(data)
-        for i in data_in:
-            if i.data != None:
-                norm = (i.data - mi) / (mx - mi) * nseg
-                pos = float(math.floor(norm))
-                if math.isclose(norm, pos, rel_tol=1e-4) and not \
-                   math.isclose(pos, 0., rel_tol=1e-4):
-                    pos -= 1
-
-                pos = int(pos)
-                i.color = [
-                    round((norm - pos) * (colormap[pos + 1][0] -
-                                    colormap[pos][0]) + colormap[pos][0], 4),
-                    round((norm - pos) * (colormap[pos + 1][1] -
-                                    colormap[pos][1]) + colormap[pos][1], 4),
-                    round((norm - pos) * (colormap[pos + 1][2] -
-                                    colormap[pos][2]) + colormap[pos][2], 4)
-                ]
-
-            else:
-                continue
-
-    return data_in, colormap
-
 def plot(atoms, bonds, mean_bond, latt_cell, cell_origin=[0, 0],
          expand=[[0, 1], [0, 1]], out_name='fig_out',
-         colormap=[[0, 0, 1], [0, 1, 1], [0, 1, 0], [1, 1, 0], [1, 0, 0]]):
+         colormap=[[0, 0, 1], [0, 1, 1], [0, 1, 0], [1, 1, 0], [1, 0, 0]],
+         colorrange=[None, None]):
+    """
+    Plot 2D colored atoms. atoms, bonds, mean_bond are outputs of previous
+    steps, refer to the main function.
+
+    Args:
+        cell_origin (list): 2\*1 list of float. Define the origin of cell.
+            Common choices are [0, 0] and [-0.5, -0.5].
+        expand (list):  2\*2 list. The lower and upper boundary of cell
+            expansion along lattice vectors a and b.
+        out_name (str): Output plot name. In pdf format
+        colormap (list): ncolor\*3 list. RGB values defining important colors
+            of colormap
+        colorrange (list): 2\*2 list. Lower and upper range of colormaps for
+            atoms and bonds. None for default ones.
+
+    For default colormap:
+        Red: (1, 0, 0) (max)
+        Yellow: (1, 1, 0)
+        Green: (0, 1, 0)
+        Cyan: (0, 1, 1)
+        Blue: (0, 0, 1) (min)
+    """
     # expand plotted cell
     bonds_new = cellexpand(latt_cell, bonds=bonds, expand=expand)
 
     fig = plt.figure(figsize=[10, 7.5])
     grid = plt.GridSpec(2, 20)
+
+    # draw colorbar and assign color for bonds
+    bond_data = [i.data for i in bonds_new if i.data]
+    if bond_data:
+        bond_barax = fig.add_subplot(grid[1, 19])
+        if colorrange[1] != None:
+            if not isinstance(colorrange[1], list):
+                raise ValueError("'colorrange' must be a 2x2 list.")
+            bond_bar = Colorbar(ax=bond_barax, mx=max(colorrange[1]), mi=min(colorrange[1]))
+        else:
+            bond_bar = Colorbar(ax=bond_barax, mx=max(bond_data), mi=min(bond_data))
+        bond_bar = bond_bar.grad_cmap(colormap=colormap)
+        bond_bar.drawColorbar(linewidth=3)
+        bonds_new = bond_bar.assign_color(bonds_new)
+
+    # draw colorbar and assign color for atoms
+    atom_data = [i.data for i in atoms if i.data]
+    if atom_data:
+        atom_barax = fig.add_subplot(grid[0, 19])
+        if colorrange[0] != None:
+            if not isinstance(colorrange[0], list):
+                raise ValueError("'colorrange' must be a 2x2 list.")
+            atom_bar = Colorbar(ax=atom_barax, mx=max(colorrange[0]), mi=min(colorrange[0]))
+        else:
+            atom_bar = Colorbar(ax=atom_barax, mx=max(atom_data), mi=min(atom_data))
+        atom_bar = atom_bar.grad_cmap(colormap=colormap)
+        atom_bar.drawColorbar()
+        atoms = atom_bar.assign_color(atoms)
+
     # plot the bonds and atoms at their two ends.
     ax = fig.add_subplot(grid[:, 0:19])
     drawn_pos = []
@@ -504,24 +566,6 @@ def plot(atoms, bonds, mean_bond, latt_cell, cell_origin=[0, 0],
         if not [i.x[1], i.y[1]] in drawn_pos:
             atoms[i.ed_label - 1].drawAtom(ax, xpos=i.x[1], ypos=i.y[1])
             drawn_pos.append([i.x[1], i.y[1]])
-
-    # draw colorbar for bonds
-    bond_data = [i.data for i in bonds_new if i.data]
-    if bond_data:
-        bond_barax = fig.add_subplot(grid[1, 19])
-        bond_bar = Colorbar(ax=bond_barax, mx=max(bond_data),
-                            mi=min(bond_data))
-        bond_bar = bond_bar.grad_cmap(colormap=colormap)
-        bond_bar.drawColorbar(linewidth=3)
-
-    # draw colorbar for atoms
-    atom_data = [i.data for i in atoms if i.data]
-    if atom_data:
-        atom_barax = fig.add_subplot(grid[0, 19])
-        atom_bar = Colorbar(ax=atom_barax, mx=0.094,
-                            mi=-0.052)
-        atom_bar = atom_bar.grad_cmap(colormap=colormap)
-        atom_bar.drawColorbar()
 
     # draw lattice cell
     latt_cell.drawCell(ax, cell_origin)
@@ -569,19 +613,16 @@ else:
         f2_line = []
 
 atoms, natom, latt_cell = read_geom(gui_line)
-bonds, mean_bond = connectivity(atoms, natom, latt_cell)
+bonds, mean_bond = connectivity(atoms, natom, latt_cell, scale=1.1)
 atoms, bonds = read_data(f1_line, f2_line, atoms, natom, bonds)
 
-atoms, colormap = color_assign(atoms)
-bonds, colormap = color_assign(bonds)
-
-# plot(atoms, bonds, mean_bond, latt_cell,
-#      cell_origin=[0.4, 0.4],
-#      expand=[[0.4,1.4], [0.4, 1.4]],
-#      colormap=colormap,
-#      out_name='chg5x5')
 plot(atoms, bonds, mean_bond, latt_cell,
-     cell_origin=[-0.5, -0.5],
-     expand=[[-0.5,0.5], [-0.5, 0.5]],
-     colormap=colormap,
-     out_name='chg4x4')
+     cell_origin=[0.4, 0.4],
+     expand=[[0.4,1.4], [0.4, 1.4]],
+     out_name='chg10x10',
+     colorrange=[[-0.052, 0.094], None])
+# plot(atoms, bonds, mean_bond, latt_cell,
+#      cell_origin=[-0.5, -0.5],
+#      expand=[[-0.5,0.5], [-0.5, 0.5]],
+#      out_name='chg8x8',
+#      colorrange=[[-0.052, 0.094], None])
